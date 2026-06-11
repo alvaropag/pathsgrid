@@ -4,13 +4,13 @@
 #include <vector>
 using namespace std;
 
-// Descomente para imprimir cada poda com sua condição e o estado do grid
-#define PRINT_DEBUG
+// descomente para ver cada poda com o estado do grid
+//!!!ATENÇÃO: pode gerar muita saída no console!!!
+//#define PRINT_DEBUG
 
-// Tamanho do tabuleiro: N x N células (7x7 = 49 células no total)
-const int N = 7;
+const int N = 7; // tabuleiro N x N
 
-// grid[r][c] = true se a célula (r,c) já foi visitada pelo caminho atual
+// true se a célula (r,c) já foi visitada
 bool grid[N][N];
 
 #ifdef PRINT_DEBUG
@@ -29,45 +29,37 @@ static void printGrid(int linha, int coluna, const char* motivo) {
 }
 #endif
 
-// grau[r][c] = número de vizinhos NÃO visitados da célula (r,c) no estado atual.
-// Mantido de forma incremental: atualizado a cada visita/desvisita, evitando
-// recomputar do zero a cada chamada recursiva
+// vizinhos não visitados de cada célula, atualizado incrementalmente
 int grau[N][N];
 
-// Contadores globais de células em estado crítico (excluindo o destino [6][0]):
-//   global_forcados: células com grau == 1 (beco: só uma saída disponível)
-//   global_isolados: células com grau == 0 (ilhadas: sem nenhuma saída)
-int global_forcados = 0;
+// células com grau 1 (beco) e grau 0 (ilhada), excluindo o destino [6][0]
+int global_em_beco = 0;
 int global_isolados = 0;
 
-int  caminhos = 0;       // total de caminhos encontrados
+int  caminhos = 0;
 long long totalChamadas = 0;
-string padrao;           // string de 48 chars (D/U/L/R/?) que restringe cada passo
+string padrao; // 48 chars D/U/L/R/?
 
-// Caminho em construção: caminhoAtual[i] = {linha, coluna} do i-ésimo passo (0-indexado)
+//auxiliares globais para salvar os caminhos verdadeiros
 pair<int,int> caminhoAtual[N * N];
-// Lista de todos os caminhos hamiltonianos encontrados
 vector<vector<pair<int,int>>> todosCaminhos;
 
-// Vetores de direção: baixo, cima, direita, esquerda
+// baixo, cima, direita, esquerda
 const int DR[] = {1, -1, 0, 0};
 const int DC[] = {0, 0, 1, -1};
 
+//!!!As funções abaixo foram marcadas como inline para melhorar a performance!!!
+
+//funções inline para verificar se é o destino ou se está dentro do grid N x N
 inline bool isDest(int r, int c)   { return r == N - 1 && c == 0; }
 inline bool inBounds(int r, int c) { return r >= 0 && r < N && c >= 0 && c < N; }
 
-// Verifica se o padrão permite o movimento 'dir' no passo atual.
-// '?' aceita qualquer direção; caso contrário, deve bater exatamente.
+// '?' aceita qualquer direção
 inline bool permitido(int passo, char dir) {
     return padrao[passo] == '?' || padrao[passo] == dir;
 }
 
-// --- OTIMIZAÇÃO 4: Verificação de conectividade geral (BFS) ---
-// Faz um BFS a partir de (r0, c0) pelas células não visitadas e retorna
-// quantas são alcançáveis. Se esse número for menor que o total de células
-// ainda não visitadas, o tabuleiro está fragmentado: é impossível completar
-// um caminho hamiltoniano a partir daqui, então o ramo é podado.
-// Custo: O(N²) por chamada — é o gargalo principal após as outras otimizações.
+// BFS nas células não visitadas a partir de (r0,c0); retorna quantas são alcançáveis
 inline int contarAlcancaveis(int r0, int c0) {
     bool vis[N][N] = {};
     int qr[N * N], qc[N * N];
@@ -87,18 +79,11 @@ inline int contarAlcancaveis(int r0, int c0) {
     return count;
 }
 
-// --- GRAU INCREMENTAL: visitar(r, c) ---
-// Marca (r,c) como visitada e atualiza incrementalmente:
-//   1. Remove (r,c) dos contadores globais se era grau 0 ou 1.
-//   2. Decrementa o grau de cada vizinho não visitado de (r,c),
-//      ajustando global_forcados e global_isolados conforme a transição:
-//        grau 2 → 1: vizinho virou beco (global_forcados++)
-//        grau 1 → 0: vizinho virou ilhado (global_forcados--, global_isolados++)
-// Custo: O(4) — constante, independente do tamanho do tabuleiro.
+// marca (r,c) como visitada e atualiza grau dos vizinhos e contadores globais
 void visitar(int r, int c) {
     grid[r][c] = true;
     if (!isDest(r, c)) {
-        if      (grau[r][c] == 1) global_forcados--;
+        if      (grau[r][c] == 1) global_em_beco--;
         else if (grau[r][c] == 0) global_isolados--;
     }
     for (int d = 0; d < 4; d++) {
@@ -106,29 +91,26 @@ void visitar(int r, int c) {
         if (!inBounds(nr, nc) || grid[nr][nc]) continue;
         grau[nr][nc]--;
         if (!isDest(nr, nc)) {
-            if      (grau[nr][nc] == 1) global_forcados++;
-            else if (grau[nr][nc] == 0) { global_forcados--; global_isolados++; }
+            if      (grau[nr][nc] == 1) global_em_beco++;
+            else if (grau[nr][nc] == 0) { global_em_beco--; global_isolados++; }
         }
     }
 }
 
-// --- GRAU INCREMENTAL: desvisitar(r, c) ---
-// Desfaz exatamente o que visitar() fez (backtracking).
-// Restaura grau dos vizinhos e os contadores globais ao estado anterior.
-// Custo: O(4).
+// desfaz visitar() para backtracking
 void desvisitar(int r, int c) {
     for (int d = 0; d < 4; d++) {
         int nr = r + DR[d], nc = c + DC[d];
         if (!inBounds(nr, nc) || grid[nr][nc]) continue;
         grau[nr][nc]++;
         if (!isDest(nr, nc)) {
-            if      (grau[nr][nc] == 2) global_forcados--;
-            else if (grau[nr][nc] == 1) { global_forcados++; global_isolados--; }
+            if      (grau[nr][nc] == 2) global_em_beco--;
+            else if (grau[nr][nc] == 1) { global_em_beco++; global_isolados--; }
         }
     }
     grid[r][c] = false;
     if (!isDest(r, c)) {
-        if      (grau[r][c] == 1) global_forcados++;
+        if      (grau[r][c] == 1) global_em_beco++;
         else if (grau[r][c] == 0) global_isolados++;
     }
 }
@@ -136,19 +118,16 @@ void desvisitar(int r, int c) {
 void resolver(int linha, int coluna, int contagem) {
     totalChamadas++;
 
-    // Caso base: todas as 49 células foram visitadas.
-    // O caminho é válido apenas se terminou no destino [6][0].
     if (contagem == N * N) {
         if (isDest(linha, coluna)) {
             caminhos++;
+            //adiciona o caminho completo visitado dentro do vector de todosCaminhos
             todosCaminhos.emplace_back(caminhoAtual, caminhoAtual + N * N);
         }
         return;
     }
 
-    // --- OTIMIZAÇÃO 2: Chegada prematura ao destino ---
-    // Se chegamos ao destino antes de visitar todas as células, este ramo
-    // não pode completar um caminho hamiltoniano — descarta imediatamente.
+    // chegou no destino antes de visitar tudo
     if (isDest(linha, coluna)) {
 #ifdef PRINT_DEBUG
         printGrid(linha, coluna, "OPT2: destino prematuro");
@@ -156,53 +135,37 @@ void resolver(int linha, int coluna, int contagem) {
         return;
     }
 
-    // --- OTIMIZAÇÃO 5a: Verificação de célula isolada — O(1) ---
-    // Se global_isolados > 0, existe alguma célula sem nenhum vizinho livre.
-    // Ela nunca poderá ser visitada → impossível completar o caminho.
+    // alguma célula ficou sem vizinhos livres
     if (global_isolados > 0) {
 #ifdef PRINT_DEBUG
-        printGrid(linha, coluna, "OPT5a: célula isolada");
+        printGrid(linha, coluna, "OPT3: célula isolada");
 #endif
         return;
     }
 
-    // --- OTIMIZAÇÃO 5b: Verificação de beco sem saída — O(4) ---
-    // Uma célula com grau 1 (só uma saída) só pode ser visitada como
-    // último passo daquele corredor, ou seja, deve ser o destino final
-    // ou o próximo passo a partir da posição atual.
-    //
-    // Contamos quantas células com grau 1 são vizinhas da posição atual
-    // (adj_deg1): estas ainda podem ser "salvas" como primeiro passo.
-    // As demais (global_forcados - adj_deg1) são becos inalcançáveis → poda.
-    // Se adj_deg1 > 1: dois becos adjacentes — apenas um pode ser o próximo
-    // passo, o outro virará inacessível → poda.
-    if (global_forcados > 0) {
+    // becos (grau 1): se há mais do que conseguimos visitar, poda
+    if (global_em_beco > 0) {
         int adj_deg1 = 0;
         for (int d = 0; d < 4; d++) {
             int nr = linha + DR[d], nc = coluna + DC[d];
             if (!inBounds(nr, nc) || grid[nr][nc] || isDest(nr, nc)) continue;
             if (grau[nr][nc] == 1) adj_deg1++;
         }
-        if (global_forcados - adj_deg1 > 0) {
+        if (global_em_beco - adj_deg1 > 0) {
 #ifdef PRINT_DEBUG
-            printGrid(linha, coluna, "OPT5b: beco inalcançável (forcados > adj_deg1)");
+            printGrid(linha, coluna, "OPT3: beco inalcançável (forcados > adj_deg1)");
 #endif
             return;
         }
         if (adj_deg1 > 1) {
 #ifdef PRINT_DEBUG
-            printGrid(linha, coluna, "OPT5b: dois becos adjacentes (adj_deg1 > 1)");
+            printGrid(linha, coluna, "OPT3: dois becos adjacentes (adj_deg1 > 1)");
 #endif
             return;
         }
     }
 
-    // --- OTIMIZAÇÃO 4: Conectividade geral — O(N²) ---
-    // BFS a partir do destino [6][0]: conta quantas células não visitadas
-    // são alcançáveis. Se for menos que o total restante, o tabuleiro está
-    // fragmentado e nenhum caminho hamiltoniano é possível daqui.
-    // O BFS parte do destino para garantir também que o destino em si
-    // seja alcançável a partir das demais células.
+    // BFS do destino: se não alcança todas as células restantes, tabuleiro fragmentado
     {
         int alcancaveis = contarAlcancaveis(N - 1, 0);
         int esperados   = N * N - contagem;
@@ -218,8 +181,6 @@ void resolver(int linha, int coluna, int contagem) {
         }
     }
 
-    // Tenta cada movimento permitido pelo padrão na posição atual.
-    // visitar/desvisitar mantém grau e contadores em sincronia (backtracking).
     int passo = contagem - 1;
 
     if (permitido(passo, 'D') && linha + 1 < N && !grid[linha + 1][coluna]) {
@@ -256,9 +217,8 @@ int main() {
         return 1;
     }
 
-    // Inicializa grau[r][c] com o número de vizinhos válidos de cada célula
-    // no tabuleiro vazio (antes de qualquer visita).
-    // Células de canto têm grau 2, de borda grau 3, internas grau 4.
+    auto inicio = chrono::high_resolution_clock::now();
+    // inicializa grau com o número de vizinhos de cada célula no tabuleiro vazio
     for (int r = 0; r < N; r++)
         for (int c = 0; c < N; c++) {
             grau[r][c] = 0;
@@ -268,11 +228,10 @@ int main() {
             }
         }
 
-    // Marca [0][0] como visitada (ponto de partida) e atualiza graus vizinhos.
     visitar(0, 0);
     caminhoAtual[0] = {0, 0};
 
-    auto inicio = chrono::high_resolution_clock::now();
+
     resolver(0, 0, 1);
     auto fim = chrono::high_resolution_clock::now();
     chrono::duration<double> tempo = fim - inicio;
@@ -282,17 +241,14 @@ int main() {
     cout << "Tempo de execucao:    " << tempo.count() << "s\n\n";
 
 #ifdef PRINT_DEBUG
-    // Imprime cada caminho como grid com número do passo em cada célula
     for (int idx = 0; idx < (int)todosCaminhos.size(); idx++) {
         const auto& cam = todosCaminhos[idx];
         cout << "=== Caminho " << idx + 1 << " ===\n";
 
-        // Monta grade de ordem de visita
         int ordem[N][N] = {};
         for (int i = 0; i < N * N; i++)
             ordem[cam[i].first][cam[i].second] = i + 1;
 
-        // Cabeçalho de colunas
         cout << "   ";
         for (int c = 0; c < N; c++) printf(" c%d", c);
         printf("\n");
